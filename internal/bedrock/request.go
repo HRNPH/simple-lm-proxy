@@ -1,189 +1,19 @@
-package main
+package bedrock
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+
+	"lm-prox/internal/openai"
 )
 
-type ChatRequest struct {
-	Model               string          `json:"model"`
-	Messages            []ChatMessage   `json:"messages"`
-	Temperature         *float64        `json:"temperature,omitempty"`
-	TopP                *float64        `json:"top_p,omitempty"`
-	MaxTokens           *int            `json:"max_tokens,omitempty"`
-	MaxCompletionTokens *int            `json:"max_completion_tokens,omitempty"`
-	Stream              bool            `json:"stream,omitempty"`
-	StreamOptions       *StreamOptions  `json:"stream_options,omitempty"`
-	Stop                json.RawMessage `json:"stop,omitempty"`
-	Tools               []Tool          `json:"tools,omitempty"`
-	ToolChoice          json.RawMessage `json:"tool_choice,omitempty"`
-	N                   *int            `json:"n,omitempty"`
-	User                string          `json:"user,omitempty"`
-}
-
-type StreamOptions struct {
-	IncludeUsage bool `json:"include_usage,omitempty"`
-}
-
-type ChatMessage struct {
-	Role       string          `json:"role"`
-	Content    json.RawMessage `json:"content"`
-	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	Name       string          `json:"name,omitempty"`
-}
-
-type ContentPart struct {
-	Type     string     `json:"type"`
-	Text     string     `json:"text,omitempty"`
-	ImageURL *ImageURLP `json:"image_url,omitempty"`
-}
-
-type ImageURLP struct {
-	URL    string `json:"url"`
-	Detail string `json:"detail,omitempty"`
-}
-
-type ToolCall struct {
-	ID       string       `json:"id"`
-	Type     string       `json:"type"`
-	Function FunctionCall `json:"function"`
-}
-
-type FunctionCall struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
-
-type Tool struct {
-	Type     string       `json:"type"`
-	Function *FunctionDef `json:"function,omitempty"`
-}
-
-type FunctionDef struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters,omitempty"`
-	Strict      *bool           `json:"strict,omitempty"`
-}
-
-type ToolChoice struct {
-	Type     string `json:"type,omitempty"`
-	Function *struct {
-		Name string `json:"name"`
-	} `json:"function,omitempty"`
-}
-
-type ChatCompletionResponse struct {
-	ID      string   `json:"id"`
-	Object  string   `json:"object"`
-	Created int64    `json:"created"`
-	Model   string   `json:"model"`
-	Choices []Choice `json:"choices"`
-	Usage   *Usage   `json:"usage"`
-}
-
-type Choice struct {
-	Index        int             `json:"index"`
-	Message      ResponseMessage `json:"message"`
-	FinishReason string          `json:"finish_reason"`
-}
-
-type ResponseMessage struct {
-	Role             string     `json:"role"`
-	Content          *string    `json:"content"`
-	ReasoningContent *string    `json:"reasoning_content,omitempty"`
-	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
-}
-
-type Usage struct {
-	PromptTokens        int                  `json:"prompt_tokens"`
-	CompletionTokens    int                  `json:"completion_tokens"`
-	TotalTokens         int                  `json:"total_tokens"`
-	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
-}
-
-type PromptTokensDetails struct {
-	CachedTokens int `json:"cached_tokens"`
-}
-
-type StreamChunk struct {
-	ID      string        `json:"id"`
-	Object  string        `json:"object"`
-	Created int64         `json:"created"`
-	Model   string        `json:"model"`
-	Choices []ChunkChoice `json:"choices"`
-	Usage   *Usage        `json:"usage,omitempty"`
-}
-
-type ChunkChoice struct {
-	Index        int     `json:"index"`
-	Delta        Delta   `json:"delta"`
-	FinishReason *string `json:"finish_reason"`
-}
-
-type Delta struct {
-	Role             string          `json:"role,omitempty"`
-	Content          *string         `json:"content,omitempty"`
-	ReasoningContent *string         `json:"reasoning_content,omitempty"`
-	ToolCalls        []ToolCallDelta `json:"tool_calls,omitempty"`
-}
-
-type ToolCallDelta struct {
-	Index    int            `json:"index"`
-	ID       string         `json:"id,omitempty"`
-	Type     string         `json:"type,omitempty"`
-	Function *FunctionDelta `json:"function,omitempty"`
-}
-
-type FunctionDelta struct {
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
-}
-
-type openAIError struct {
-	Error errorBody `json:"error"`
-}
-
-type errorBody struct {
-	Message string `json:"message"`
-	Type    string `json:"type"`
-	Param   any    `json:"param"`
-	Code    any    `json:"code"`
-}
-
-func newChunk(id string, created int64, model string, choice ChunkChoice) StreamChunk {
-	return StreamChunk{
-		ID:      id,
-		Object:  "chat.completion.chunk",
-		Created: created,
-		Model:   model,
-		Choices: []ChunkChoice{choice},
-	}
-}
-
-func newChunkWithUsage(id string, created int64, model string, usage *Usage) StreamChunk {
-	return StreamChunk{
-		ID:      id,
-		Object:  "chat.completion.chunk",
-		Created: created,
-		Model:   model,
-		Choices: []ChunkChoice{},
-		Usage:   usage,
-	}
-}
-
-type converseParams struct {
+type Params struct {
 	modelID    string
 	system     []types.SystemContentBlock
 	messages   []types.Message
@@ -191,7 +21,7 @@ type converseParams struct {
 	toolConfig *types.ToolConfiguration
 }
 
-func (p *converseParams) toConverseInput() *bedrockruntime.ConverseInput {
+func (p *Params) toConverseInput() *bedrockruntime.ConverseInput {
 	return &bedrockruntime.ConverseInput{
 		ModelId:         aws.String(p.modelID),
 		System:          p.system,
@@ -201,7 +31,7 @@ func (p *converseParams) toConverseInput() *bedrockruntime.ConverseInput {
 	}
 }
 
-func (p *converseParams) toStreamInput() *bedrockruntime.ConverseStreamInput {
+func (p *Params) toStreamInput() *bedrockruntime.ConverseStreamInput {
 	return &bedrockruntime.ConverseStreamInput{
 		ModelId:         aws.String(p.modelID),
 		System:          p.system,
@@ -211,8 +41,8 @@ func (p *converseParams) toStreamInput() *bedrockruntime.ConverseStreamInput {
 	}
 }
 
-func buildParams(req *ChatRequest) (*converseParams, error) {
-	p := &converseParams{modelID: resolveModel(req.Model)}
+func BuildParams(req *openai.ChatRequest) (*Params, error) {
+	p := &Params{modelID: Resolve(req.Model)}
 
 	var raw []types.Message
 
@@ -353,7 +183,7 @@ func parseToolChoice(raw json.RawMessage) (types.ToolChoice, bool, error) {
 		}
 	}
 
-	var tc ToolChoice
+	var tc openai.ToolChoice
 	if err := json.Unmarshal(raw, &tc); err != nil {
 		return nil, false, fmt.Errorf("tool_choice: invalid value")
 	}
@@ -391,7 +221,7 @@ func extractText(raw json.RawMessage) (string, error) {
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return s, nil
 	}
-	var parts []ContentPart
+	var parts []openai.ContentPart
 	if err := json.Unmarshal(raw, &parts); err != nil {
 		return "", fmt.Errorf("content must be string or array of parts")
 	}
@@ -416,7 +246,7 @@ func buildUserBlocks(raw json.RawMessage) ([]types.ContentBlock, error) {
 		return []types.ContentBlock{&types.ContentBlockMemberText{Value: s}}, nil
 	}
 
-	var parts []ContentPart
+	var parts []openai.ContentPart
 	if err := json.Unmarshal(raw, &parts); err != nil {
 		return nil, fmt.Errorf("content must be string or array of parts")
 	}
@@ -444,7 +274,7 @@ func buildUserBlocks(raw json.RawMessage) ([]types.ContentBlock, error) {
 	return blocks, nil
 }
 
-func buildAssistantBlocks(m ChatMessage, idx int) []types.ContentBlock {
+func buildAssistantBlocks(m openai.ChatMessage, idx int) []types.ContentBlock {
 	var blocks []types.ContentBlock
 
 	text, err := extractText(m.Content)
@@ -475,7 +305,7 @@ func buildAssistantBlocks(m ChatMessage, idx int) []types.ContentBlock {
 	return blocks
 }
 
-func buildToolResultBlocks(m ChatMessage) []types.ContentBlock {
+func buildToolResultBlocks(m openai.ChatMessage) []types.ContentBlock {
 	text, _ := extractText(m.Content)
 
 	var result types.ToolResultContentBlock
@@ -518,93 +348,4 @@ func mergeMessages(msgs []types.Message) []types.Message {
 		out = append(out, m)
 	}
 	return out
-}
-
-var imageClient = &http.Client{Timeout: 20 * time.Second}
-
-const maxImageBytes = 4 << 20
-
-func fetchImage(url string) (*types.ImageBlock, error) {
-	var data []byte
-	var mime string
-
-	if strings.HasPrefix(url, "data:") {
-		comma := strings.Index(url, ",")
-		if comma < 0 {
-			return nil, fmt.Errorf("invalid data URI")
-		}
-		meta := url[5:comma]
-		payload := url[comma+1:]
-		if !strings.Contains(meta, "base64") {
-			return nil, fmt.Errorf("only base64 data URIs supported")
-		}
-		mime = strings.TrimSuffix(strings.Split(meta, ";")[0], ";")
-		var err error
-		data, err = base64.StdEncoding.DecodeString(payload)
-		if err != nil {
-			return nil, fmt.Errorf("invalid base64 image data: %w", err)
-		}
-	} else if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
-		req, err := http.NewRequest(http.MethodGet, url, nil)
-		if err != nil {
-			return nil, err
-		}
-		resp, err := imageClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("fetch image: %w", err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("fetch image: status %d", resp.StatusCode)
-		}
-		mime = strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0])
-		data, err = io.ReadAll(io.LimitReader(resp.Body, maxImageBytes+1))
-		if err != nil {
-			return nil, fmt.Errorf("read image: %w", err)
-		}
-	} else {
-		return nil, fmt.Errorf("unsupported image URL scheme (use data: or http(s):)")
-	}
-
-	if len(data) == 0 {
-		return nil, fmt.Errorf("empty image data")
-	}
-	if len(data) > maxImageBytes {
-		return nil, fmt.Errorf("image exceeds %d bytes", maxImageBytes)
-	}
-
-	format := detectImageFormat(data, mime)
-	if format == "" {
-		return nil, fmt.Errorf("unsupported image format (png, jpeg, gif, webp only)")
-	}
-
-	return &types.ImageBlock{
-		Format: format,
-		Source: &types.ImageSourceMemberBytes{Value: data},
-	}, nil
-}
-
-func detectImageFormat(data []byte, mime string) types.ImageFormat {
-	switch {
-	case len(data) >= 8 && data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4e && data[3] == 0x47:
-		return types.ImageFormatPng
-	case len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff:
-		return types.ImageFormatJpeg
-	case len(data) >= 6 && (string(data[:6]) == "GIF87a" || string(data[:6]) == "GIF89a"):
-		return types.ImageFormatGif
-	case len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP":
-		return types.ImageFormatWebp
-	}
-
-	switch strings.ToLower(mime) {
-	case "image/png":
-		return types.ImageFormatPng
-	case "image/jpeg", "image/jpg":
-		return types.ImageFormatJpeg
-	case "image/gif":
-		return types.ImageFormatGif
-	case "image/webp":
-		return types.ImageFormatWebp
-	}
-	return ""
 }

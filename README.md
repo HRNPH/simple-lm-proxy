@@ -8,7 +8,14 @@ A small Go server that speaks the OpenAI Chat Completions API and forwards reque
 - `GET /v1/models` lists every supported model alias
 - `GET /health` returns a simple status check
 - Auth via the AWS credential chain or a Bedrock bearer token
-- Short aliases for Claude, GPT, Grok, Kimi, and Nova models (see `modelAliases` in `main.go`)
+- Short aliases for Claude, GPT, Grok, Kimi, and Nova models (see the `Aliases` map in `internal/bedrock`)
+
+## Project layout
+
+- `cmd/lmprox`: entry point
+- `internal/openai`: OpenAI request and response types
+- `internal/bedrock`: Bedrock client, request mapping, streaming
+- `internal/server`: HTTP routes, middleware, error mapping
 
 ## Configuration
 
@@ -26,7 +33,7 @@ Standard AWS credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SES
 From source:
 
 ```
-go run .
+go run ./cmd/lmprox
 ```
 
 With Docker:
