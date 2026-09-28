@@ -1,0 +1,4 @@
+lm-prox
+lm-prox-bin
+*.log
+.env

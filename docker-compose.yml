@@ -1,0 +1,17 @@
+services:
+  lm-prox:
+    build: .
+    container_name: lm-prox
+    ports:
+      - "10000:10000"
+    environment:
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      AWS_PROFILE: ${AWS_PROFILE:-}
+      AWS_BEARER_TOKEN_BEDROCK: ${AWS_BEARER_TOKEN_BEDROCK:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    volumes:
+      - ${HOME}/.aws:/root/.aws:ro
+    restart: unless-stopped
